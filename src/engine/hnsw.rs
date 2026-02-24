@@ -5,6 +5,16 @@ pub struct VectorNode{
     pub neighbors: Vec<Vec<usize>>,
 }
 
+impl VectorNode{
+    pub fn new(id:usize,vector: Vec<f32>,max_layer: usize) -> Self{
+        Self{
+            id,
+            vector,
+            neighbors: vec![vec![]; max_layer+1],
+        }
+    }
+}
+
 pub struct HnswIndex{
     pub nodes: Vec<VectorNode>,
     pub entry_point: Option<usize>,
@@ -76,14 +86,13 @@ impl HnswIndex{
 
         neighbors.truncate(self.m);
     }
+
+    pub fn save_to_mmap(&self, storage: &mut MmapStorage) {
+        let encoded: Vec<u8> = bincode::serialize(self).unwrap();
+        // Copy the encoded bytes into the memory-mapped region
+        storage.mmap[..encoded.len()].copy_from_slice(&encoded);
+        storage.flush().expect("Failed to sync to disk");
+    }
+
 }
 
-impl VectorNode{
-    pub fn new(id:usize,vector: Vec<f32>,max_layer: usize) -> Self{
-        Self{
-            id,
-            vector,
-            neighbors: vec![vec![]; max_layer+1],
-        }
-    }
-}
