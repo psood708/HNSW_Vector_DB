@@ -1,3 +1,10 @@
+use serde::{Serialize,Deserialize};
+use crate::engine::distance::{Distance,CosineSimilarity};
+use crate::storage::MmapStorage;
+
+
+
+
 #[derive(Debug)]
 pub struct VectorNode{
     pub id: usize,
@@ -15,6 +22,7 @@ impl VectorNode{
     }
 }
 
+#[derive(Serialize,Deserialize,Debug)]
 pub struct HnswIndex{
     pub nodes: Vec<VectorNode>,
     pub entry_point: Option<usize>,
@@ -46,7 +54,7 @@ impl HnswIndex{
             }
 
             // insert and connct on all layers from target_layer  down to 0
-            for layer in (0..=std::cmp::min(target_layer,self.target_layer)).rev(){
+            for layer in (0..=std::cmp::min(target_layer,self.max_layer)).rev(){
                 let neighbors = self.find_neighbors_for_layer(&new_node.vector,curr_entry_id,layer);
                 for neighbor_id in neighbors{
                     new_node.neighbors[layer].push(neighbor_id);
@@ -71,7 +79,7 @@ impl HnswIndex{
 
     fn prune_neighbors(&mut self, node_id: usize, layer: usize){
         let node_vector = self.nodes[node_id].vector.clone();
-        let neighbors = &mut self.nodes[node_id].neighbors[layer];
+        let mut neighbors = self.nodes[node_id].neighbors[layer].clone();
 
         if neighbors.len() <= self.m{
             return;
@@ -85,6 +93,49 @@ impl HnswIndex{
         });
 
         neighbors.truncate(self.m);
+        self.nodes[node_id].neighbors[layer] = neighbors;
+
+    }
+
+    pub fn calculate_random_layer(&self) -> usize {
+        let mut rng = rand::thread_rng();
+        let r: f64 = rng::gen_range(&mut rng);
+        (-r.ln() * self.m_l).floor() as usize
+    }
+
+    //  The core layer search
+    pub fn search_layer(&self, query: &[f32], entry_point: usize, layer: usize) -> usize {
+        let mut current_node = entry_point;
+        let mut best_dist = CosineSimilarity::calculate(query, &self.nodes[current_node].vector);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &neighbor_id in &self.nodes[current_node].neighbors[layer] {
+                let dist = CosineSimilarity::calculate(query, &self.nodes[neighbor_id].vector);
+                if dist > best_dist {
+                    best_dist = dist;
+                    current_node = neighbor_id;
+                    changed = true;
+                }
+            }
+        }
+        current_node
+    }
+
+    // The top-level search method
+    pub fn discover_nearest(&self, query: &[f32]) -> Option<usize> {
+        let mut current_entry = self.entry_point?;
+        for layer in (1..=self.max_layer).rev() {
+            current_entry = self.search_layer(query, current_entry, layer);
+        }
+        Some(self.search_layer(query, current_entry, 0))
+    }
+
+    //  Helper for insertion  
+    pub fn find_neighbors_for_layer(&self, query: &[f32], entry: usize, layer: usize) -> Vec<usize> {
+        // For now, return the best one found; 
+        // a real HNSW would return a set of top-M candidates
+        vec![self.search_layer(query, entry, layer)]
     }
 
     pub fn save_to_mmap(&self, storage: &mut MmapStorage) {
@@ -93,6 +144,9 @@ impl HnswIndex{
         storage.mmap[..encoded.len()].copy_from_slice(&encoded);
         storage.flush().expect("Failed to sync to disk");
     }
+
+
+
 
 }
 

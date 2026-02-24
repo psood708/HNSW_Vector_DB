@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 pub struct InsertRequest {
     pub vector: Vec<f32>,
 }
