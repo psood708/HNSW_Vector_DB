@@ -33,32 +33,20 @@ async fn main(){
 }
 
 
-// async fn insert_vector(
-//     State(state): State<SharedState>,
-//     Json(payload): Json<InsertRequest>,
-// ) -> &'static str{
-//     let mut index = state.write().unwrap();
-//     index.insert(payload.vector);
-//     "Vector Inserted Successfully"
-// }
-
-// async fn search_vectors(
-//     State(state): State<SharedState>,
-//     Json(payload): Json<SearchRequest>,
-// ) -> Json<SearchResponse> {
-//     let index = state.read().unwrap();
-//     let results = index.discover_nearest(&payload.query);
-
-//     Json(SearchResponse{
-//         matches: vec![SearchResult{ id: results.unwrap_or(0),score: 0.99}]
-//     })
-// }
-
 pub async fn insert_handler(
     State(state): State<SharedState>,
     Json(payload): Json<InsertRequest>,
 ) -> &'static str {
-    let mut index = state.write().expect("Failed to acquire write lock");
+    // Use 'unwrap_or_else' to recover the data even if poisoned, 
+    // or just handle the error gracefully.
+    let mut index = match state.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            println!("⚠️ Lock was poisoned! Recovering data...");
+            poisoned.into_inner()
+        }
+    };
+    
     index.insert(payload.vector);
     "Vector successfully indexed"
 }
@@ -69,6 +57,9 @@ pub async fn search_handler(
 ) -> Json<SearchResponse> {
     let index = state.read().expect("Failed to acquire read lock");
     
+    if index.nodes.is_empty() {
+        return Json(SearchResponse { matches: vec![] });
+    }
     // Using our HNSW search logic
     let result_id = index.discover_nearest(&payload.query);
     

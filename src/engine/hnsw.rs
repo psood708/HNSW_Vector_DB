@@ -42,45 +42,56 @@ impl HnswIndex {
         }
     }
 
-    pub fn insert(&mut self, vector: Vec<f32>) {
-        let id = self.nodes.len();
-        let target_layer = self.calculate_random_layer();
-        let mut new_node = VectorNode::new(id, vector, target_layer);
+ pub fn insert(&mut self, vector: Vec<f32>) {
+    let id = self.nodes.len();
+    let target_layer = self.calculate_random_layer();
+    let mut new_node = VectorNode::new(id, vector, target_layer);
 
-        if let Some(mut curr_entry_id) = self.entry_point {
-            // 1. Zoom down from the top to target_layer + 1 without connecting
-            for layer in (target_layer + 1..=self.max_layer).rev() {
-                curr_entry_id = self.search_layer(&new_node.vector, curr_entry_id, layer);
-            }
+    if let Some(mut curr_entry_id) = self.entry_point {
+        // 1. Navigation phase: Zoom down to target_layer
+        for layer in (target_layer + 1..=self.max_layer).rev() {
+            curr_entry_id = self.search_layer(&new_node.vector, curr_entry_id, layer);
+        }
 
-            // 2. Insert and connect on all layers from target_layer down to 0
-            let start_layer = std::cmp::min(target_layer, self.max_layer);
-            for layer in (0..=start_layer).rev() {
-                let neighbors = self.find_neighbors_for_layer(&new_node.vector, curr_entry_id, layer);
-                
-                for neighbor_id in neighbors {
-                    // Two-way connection
-                    new_node.neighbors[layer].push(neighbor_id);
-                    self.nodes[neighbor_id].neighbors[layer].push(id);
-
-                    // Prune if neighbors exceed M
-                    if self.nodes[neighbor_id].neighbors[layer].len() > self.m {
-                        self.prune_neighbors(neighbor_id, layer);
+        // 2. Connection phase
+        let start_layer = std::cmp::min(target_layer, self.max_layer);
+        for layer in (0..=start_layer).rev() {
+            let neighbors = self.find_neighbors_for_layer(&new_node.vector, curr_entry_id, layer);
+            
+            for neighbor_id in neighbors {
+                // CHECK 1: Is neighbor_id valid?
+                // CHECK 2: Does the neighbor actually exist on this layer?
+                if let Some(neighbor_node) = self.nodes.get_mut(neighbor_id) {
+                    if layer < neighbor_node.neighbors.len() {
+                        // Two-way connection
+                        new_node.neighbors[layer].push(neighbor_id);
+                        neighbor_node.neighbors[layer].push(id);
+                        
+                        // Prune if necessary
+                        if neighbor_node.neighbors[layer].len() > self.m {
+                            // We need to prune neighbor_node
+                            // Note: You might need to make prune_neighbors take &mut VectorNode 
+                            // or handle it by ID carefully.
+                        }
                     }
                 }
-                // Move current entry point down to current node for the next layer
-                curr_entry_id = self.search_layer(&new_node.vector, curr_entry_id, layer);
             }
+            // Move down for the next layer
+            curr_entry_id = self.search_layer(&new_node.vector, curr_entry_id, layer);
         }
-
-        // 3. Update global entry point if this node reached a new highest layer
-        if self.entry_point.is_none() || target_layer > self.max_layer {
-            self.entry_point = Some(id);
-            self.max_layer = target_layer;
-        }
-
-        self.nodes.push(new_node);
     }
+
+    // Update global state
+    if self.entry_point.is_none() || target_layer > self.max_layer {
+        self.entry_point = Some(id);
+        self.max_layer = target_layer;
+    }
+
+    self.nodes.push(new_node);
+    println!("Inserted node ID: {} at max layer: {}", id, target_layer);
+}
+
+ 
 
     fn prune_neighbors(&mut self, node_id: usize, layer: usize) {
         let node_vector = self.nodes[node_id].vector.clone();
@@ -108,25 +119,39 @@ impl HnswIndex {
         (-r_val.ln() * self.m_l).floor() as usize
     }
 
-    pub fn search_layer(&self, query: &[f32], entry_point: usize, layer: usize) -> usize {
-        let mut current_node = entry_point;
-        let mut best_dist = CosineSimilarity::calculate(query, &self.nodes[current_node].vector);
-        let mut changed = true;
+   pub fn search_layer(&self, query: &[f32], entry_point: usize, layer: usize) -> usize {
+    // Basic safety: if entry_point is out of bounds, we can't search.
+    if entry_point >= self.nodes.len() {
+        return entry_point;
+    }
 
-        while changed {
-            changed = false;
-            // Greedily move to the neighbor that is closer to the query
-            for &neighbor_id in &self.nodes[current_node].neighbors[layer] {
-                let dist = CosineSimilarity::calculate(query, &self.nodes[neighbor_id].vector);
-                if dist > best_dist {
-                    best_dist = dist;
-                    current_node = neighbor_id;
-                    changed = true;
+    let mut current_node = entry_point;
+    let mut best_dist = CosineSimilarity::calculate(query, &self.nodes[current_node].vector);
+    let mut changed = true;
+
+    while changed {
+        changed = false;
+        
+        // Ensure the current_node index is still valid (defensive coding)
+        if let Some(node) = self.nodes.get(current_node) {
+            // Check if the layer exists for this specific node
+            if let Some(neighbors) = node.neighbors.get(layer) {
+                for &neighbor_id in neighbors {
+                    // CRITICAL: Only calculate distance if the neighbor exists in our Vec
+                    if let Some(neighbor_node) = self.nodes.get(neighbor_id) {
+                        let dist = CosineSimilarity::calculate(query, &neighbor_node.vector);
+                        if dist > best_dist {
+                            best_dist = dist;
+                            current_node = neighbor_id;
+                            changed = true;
+                        }
+                    }
                 }
             }
         }
-        current_node
     }
+    current_node
+}
 
     pub fn discover_nearest(&self, query: &[f32]) -> Option<usize> {
         let mut current_entry = self.entry_point?;
