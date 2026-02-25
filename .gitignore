@@ -1,0 +1,19 @@
+# --- Rust Specific ---
+# The target directory contains all compiled artifacts (very large)
+/target/
+
+# --- Vector DB Specific ---
+# Ignore your binary index files and memory-map storage
+*.bin
+*.db
+*.mmap
+index.bin
+
+# --- IDEs and OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Environment/Secrets ---
+.env
