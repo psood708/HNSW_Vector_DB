@@ -2,67 +2,74 @@ import requests
 import numpy as np
 import time
 
-# Note: Port updated to 8000 to match your Rust main.rs
 BASE_URL = "http://127.0.0.1:8000"
 DIM = 128
 
-def run_performance_test(n_queries=100):
-    print(f"\n📊 Running Speed Test: {n_queries} queries...")
-    query_vectors = np.random.rand(n_queries, DIM).astype(np.float32)
-    latencies = []
+def brute_force_search(query, dataset):
+    """The 'Gold Standard' - 100% accurate but slow."""
+    # Using dot product for normalized vectors as a proxy for cosine similarity
+    similarities = np.dot(dataset, query)
+    return np.argmax(similarities)
 
-    for v in query_vectors:
-        start = time.perf_counter()
-        # FIX: Changed key from "vector" to "query" to match Rust struct
-        requests.post(f"{BASE_URL}/search", json={"query": v.tolist()})
-        latencies.append(time.perf_counter() - start)
+def run_benchmark(n_vectors=50000, n_queries=50):
+    print(f"🚀 Starting Benchmark: {n_vectors} vectors, {n_queries} queries")
     
-    avg_ms = (sum(latencies) / n_queries) * 1000
-    p99_ms = np.percentile(latencies, 99) * 1000
-    print(f"✅ Avg Latency: {avg_ms:.2f}ms | p99 Latency: {p99_ms:.2f}ms")
-
-def run_recall_test(n_test=50):
-    print("🎯 Testing Recall Accuracy...")
-    # 1. Generate test data
-    test_data = np.random.rand(200, DIM).astype(np.float32)
+    # 1. Prepare Data
+    data = np.random.rand(n_vectors, DIM).astype(np.float32)
+    # Normalize for easier Cosine Similarity comparison
+    data = data / np.linalg.norm(data, axis=1, keepdims=True)
     
-    # 2. Insert into Rust
-    print(f"📥 Inserting {len(test_data)} vectors...")
-    for i, v in enumerate(test_data):
-        resp = requests.post(f"{BASE_URL}/insert", json={"id": i, "vector": v.tolist()})
-        if resp.status_code != 200:
-            print(f"❌ Insert failed for ID {i}: {resp.text}")
-            return
+    # 2. Insert Phase
+    print("📥 Indexing...")
+    for i, v in enumerate(data):
+        requests.post(f"{BASE_URL}/insert", json={"id": i, "vector": v.tolist()})
 
-    # 3. Check accuracy
-    print(f"🔍 Validating search results for {n_test} samples...")
-    matches_count = 0
-    for i in range(n_test):
-        query = test_data[i]
-        # FIX: Changed key to "query"
-        response = requests.post(f"{BASE_URL}/search", json={"query": query.tolist()})
+    # 3. Accuracy & Speed Phase
+    print("🧪 Running Tests...")
+    hnsw_latencies = []
+    brute_latencies = []
+    matches = 0
+
+    for i in range(n_queries):
+        query = data[i]
         
-        if response.status_code == 200:
-            try:
-                data = response.json()
-                # FIX: Your Rust handler returns { "matches": [ { "id": X, "score": Y } ] }
-                if data['matches'] and data['matches'][0]['id'] == i:
-                    matches_count += 1
-            except (ValueError, KeyError, IndexError) as e:
-                print(f"❌ Response parse error: {e} | Raw: {response.text}")
+        # --- Test HNSW (Your Rust Engine) ---
+        start = time.perf_counter()
+        resp = requests.post(f"{BASE_URL}/search", json={"query": query.tolist(), "k": 1})
+        hnsw_latencies.append(time.perf_counter() - start)
+        
+        # --- Test Brute Force (Python Baseline) ---
+        start_bf = time.perf_counter()
+        true_neighbor_id = brute_force_search(query, data)
+        brute_latencies.append(time.perf_counter() - start_bf)
+
+        # --- Compare ---
+        if resp.status_code == 200:
+            result = resp.json()
+            if result['matches']:
+                found_id = result['matches'][0]['id']
+                if found_id == true_neighbor_id:
+                    matches += 1
+                else:
+                    if i < 5: # Debug first few failures
+                        print(f"DEBUG: Expected ID {i} (type {type(i)}), Found ID {found_id} (type {type(found_id)})")
+                        print(f"  Mismatch at {i}: HNSW found {found_id}, BF found {true_neighbor_id}")
         else:
-            print(f"❌ Search failed: {response.status_code} {response.text}")
-            
-    recall = (matches_count / n_test) * 100
-    print(f"✅ Recall@1: {recall:.2f}% (Found {matches_count}/{n_test})")
+            print(f"❌ Search Error: {resp.text}")
+
+    # 4. Final Metrics
+    recall = (matches / n_queries) * 100
+    avg_hnsw = (sum(hnsw_latencies) / n_queries) * 1000
+    avg_brute = (sum(brute_latencies) / n_queries) * 1000
+    speedup = avg_brute / avg_hnsw
+
+    print("\n" + "="*30)
+    print(f"📊 FINAL RESULTS")
+    print(f"🎯 Recall@1: {recall:.2f}%")
+    print(f"⚡ Avg HNSW Latency: {avg_hnsw:.2f}ms")
+    print(f"🐢 Avg Brute Force: {avg_brute:.2f}ms")
+    print(f"🚀 Speedup Factor: {speedup:.1f}x faster than Linear Scan")
+    print("="*30)
 
 if __name__ == "__main__":
-    try:
-        run_recall_test()
-        run_performance_test()
-    except requests.exceptions.ConnectionError:
-        print("❌ FAILED: Could not connect to Rust server. Is it running on http://127.0.0.1:8000?")
-
-
-
-# netstat -ano | findstr :8000 ( use this for cheecking TCP calls)
+    run_benchmark()
