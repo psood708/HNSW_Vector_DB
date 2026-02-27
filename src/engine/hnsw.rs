@@ -111,6 +111,7 @@ pub fn insert(&mut self, vector: Vec<f32>) {
     if self.entry_point.is_none() || target_layer > self.max_layer {
         self.entry_point = Some(id);
         self.max_layer = target_layer;
+        println!("🆕 New Entry Point: Node {} at Layer {}", id, target_layer);
     }
 
     // 4. Prune the new node itself

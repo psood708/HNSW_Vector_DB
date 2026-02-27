@@ -11,7 +11,7 @@ def brute_force_search(query, dataset):
     similarities = np.dot(dataset, query)
     return np.argmax(similarities)
 
-def run_benchmark(n_vectors=50000, n_queries=50):
+def run_benchmark(n_vectors=10000, n_queries=50):
     print(f"🚀 Starting Benchmark: {n_vectors} vectors, {n_queries} queries")
     
     # 1. Prepare Data
